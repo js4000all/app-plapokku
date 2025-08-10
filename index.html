@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Planning Poker Assistant (Alpine.js)</title>
+    <!-- お手軽スタイル：Pico.css（CDN） -->
+    <link rel="stylesheet" href="https://unpkg.com/@picocss/pico@2/css/pico.min.css">
+    <!-- Alpine.js（CDN） -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+      /* —— 高コントラスト配色（Light/Dark両対応） —— */
+      :root{
+        --bg: #f6f7fb;
+        --panel-bg:#ffffff;
+        --text:#111827;           /* slate-900 */
+        --muted:#4b5563;          /* slate-600：読みやすい濃さに上げる */
+        --border:#d1d5db;         /* gray-300 */
+        --primary:#2563eb;        /* blue-600 */
+        --primary-contrast:#ffffff;
+        --tag-bg:#eef2ff;         /* indigo-50 */
+        --tag-text:#3730a3;       /* indigo-800 */
+        --chip-bg:#ffffff;
+        --chip-disabled:#f3f4f6;  /* gray-100 */
+        --active-bg:#eff6ff;      /* blue-50 */
+      }
+      @media (prefers-color-scheme: dark){
+        :root{
+          --bg:#0b1020;
+          --panel-bg:#121826;
+          --text:#e5e7eb;         /* slate-200 */
+          --muted:#a1a1aa;        /* zinc-400 */
+          --border:#253045;
+          --primary:#60a5fa;      /* blue-400 */
+          --primary-contrast:#0b1020;
+          --tag-bg:#1d2a44;       /* indigo系の濃色 */
+          --tag-text:#cfe1ff;
+          --chip-bg:#1f2937;
+          --chip-disabled:#111827;
+          --active-bg:#0f1c3c;    /* blue-950相当 */
+        }
+      }
+
+      body { background: var(--bg); color: var(--text); }
+      header .badge { padding: .25rem .6rem; border-radius: 1rem; background: var(--tag-bg); color: var(--tag-text); font-weight: 600; font-size: .8rem; }
+
+      .three { display: grid; gap: 1rem; }
+      @media (min-width: 900px) { .three { grid-template-columns: 1fr 1fr 1fr; } }
+
+      .panel { background: var(--panel-bg); color: var(--text); border: 1px solid var(--border); border-radius: 12px; padding: 1rem; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+      .panel h3 { margin: 0 0 .5rem; font-size: 1rem; }
+      .scroll { max-height: 540px; overflow: auto; padding-right: .25rem; }
+
+      .tag { display:inline-block; padding: .15rem .5rem; border-radius: .75rem; background: var(--tag-bg); color: var(--tag-text); font-size: .75rem; }
+
+      .itemBtn { width: 100%; text-align: left; border-radius: 12px; border: 1px solid var(--border); padding: .75rem; background: var(--panel-bg); color: var(--text); }
+      .itemBtn.active { background: var(--active-bg); border-color: var(--primary); }
+
+      .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; }
+      .row { display: flex; gap: .5rem; align-items: center; }
+
+      .muted, .hint { color: var(--muted); }
+
+      /* 入力UIは背景と文字色を固定し、薄すぎ問題を回避 */
+      input, select { background: var(--panel-bg); color: var(--text); border-color: var(--border); }
+      ::placeholder { color: var(--muted); opacity: .95; }
+
+      /* 汎用チップボタン（押下・無効時のコントラストを改善） */
+      .chip { border-radius: 9999px; padding: .35rem .7rem; border: 1px solid var(--border); background: var(--chip-bg); color: var(--text); }
+      .chip[aria-pressed="true"] { background: var(--primary); color: var(--primary-contrast); border-color: var(--primary); }
+      .chip:disabled { background: var(--chip-disabled); color: var(--muted); border-color: var(--border); opacity: 1; }
+
+      .pointBox { text-align: right; }
+      .pointBox .pt { font-size: 1.1rem; font-weight: 700; color: var(--text); }
+
+      /* Picoのsecondaryを上書きして読みやすく */
+      button.secondary {
+        background: transparent; color: var(--text); border: 1px solid var(--border);
+      }
+      button.secondary:hover { background: var(--chip-disabled); }
+    </style>
+  </head>
+  <body x-data="app()" class="container">
+    <header class="row" style="justify-content: space-between; margin: 1rem 0 1rem;">
+      <div class="row" style="gap:.6rem">
+        <h1 style="margin:0; font-size:1.25rem;">Planning Poker Assistant</h1>
+        <span class="badge">Three‑pane Layout</span>
+      </div>
+      <div class="row">
+        <select x-model="deckName" aria-label="Deck" style="min-width: 9rem;">
+          <option value="Fibonacci">Fibonacci</option>
+          <option value="Linear">Linear</option>
+        </select>
+        <button class="secondary" @click="resetAll">Clear</button>
+      </div>
+    </header>
+
+    <div class="three">
+      <!-- Left: Backlog -->
+      <section class="panel">
+        <h3>Backlog</h3>
+        <div class="row" style="margin-bottom:.5rem">
+          <input type="search" placeholder="Filter by title or tag" x-model.trim="filterText" />
+        </div>
+        <div class="scroll">
+          <template x-for="s in filteredBacklog" :key="s.id">
+            <button class="itemBtn" :class="{active: s.id === currentId}" @click="selectBacklog(s.id)">
+              <div style="font-weight:600; line-height:1.2" x-text="s.title"></div>
+              <div style="margin-top:.25rem; display:flex; gap:.25rem; flex-wrap:wrap;">
+                <template x-for="t in s.tags"><span class="tag" x-text="t"></span></template>
+              </div>
+            </button>
+          </template>
+          <p class="muted" x-show="backlog.length===0">No backlog items.</p>
+        </div>
+      </section>
+
+      <!-- Center: Current Item -->
+      <section class="panel">
+        <h3>Current Item</h3>
+        <template x-if="current">
+          <div>
+            <div class="panel" style="padding:1rem;">
+              <div style="font-weight:600" x-text="current.title"></div>
+              <div style="margin-top:.25rem; display:flex; gap:.25rem; flex-wrap:wrap;">
+                <template x-for="t in current.tags"><span class="tag" x-text="t"></span></template>
+              </div>
+            </div>
+
+            <!-- Candidate Points -->
+            <div style="margin-top:1rem;">
+              <div class="muted" style="margin-bottom:.25rem;">Candidate Points (<span x-text="candidates.length"></span>)</div>
+              <div style="display:flex; flex-wrap:wrap; gap:.5rem;">
+                <template x-for="v in deckToUse" :key="v">
+                  <button class="chip" :aria-pressed="picked===v" :disabled="!candidates.includes(v)" @click="candidates.includes(v) && (picked=v)">
+                    <span x-text="v"></span>
+                  </button>
+                </template>
+              </div>
+            </div>
+
+            <!-- Confirm -->
+            <div class="row" style="margin-top:1rem;">
+              <button @click="handleConfirm" :disabled="picked===undefined">Confirm</button>
+              <span class="hint" x-show="picked===undefined">Select a point to confirm.</span>
+            </div>
+          </div>
+        </template>
+        <p class="muted" x-show="!current">Select an item from the backlog.</p>
+      </section>
+
+      <!-- Right: Confirmed List -->
+      <section class="panel">
+        <h3>Confirmed List (Reference)</h3>
+        <div class="scroll">
+          <template x-for="s in confirmed" :key="s.id">
+            <div class="panel" style="padding: .75rem;">
+              <div class="row" style="justify-content: space-between; align-items:flex-start;">
+                <div style="font-weight:600; line-height:1.2" x-text="s.title"></div>
+                <div class="pointBox">
+                  <div class="pt" x-text="s.point"></div>
+                  <div class="hint">pt</div>
+                </div>
+              </div>
+              <div class="grid3" style="margin-top:.5rem;">
+                <template x-for="label in labels" :key="label">
+                  <button class="chip" :aria-pressed="choices[s.id]===label"
+                          :disabled="!isLabelEnabled(s.id, label)"
+                          @click="toggleChoice(s.id, label)">
+                    <span x-text="label"></span>
+                  </button>
+                </template>
+              </div>
+            </div>
+          </template>
+        </div>
+        <p class="muted" x-show="confirmed.length===0">No confirmed items yet.</p>
+      </section>
+    </div>
+
+    <p class="hint" style="margin-top:1rem;">Selecting "Same" also keeps points one step above and below as candidates. Changing the current item resets selections.</p>
+
+    <script>
+      function app() {
+        const defaultDeck = [1, 2, 3, 5, 8, 13, 20, 40, 100]
+        const linearDeck  = [1,2,3,4,5,6,7,8,9,10]
+        const labels = ["Bigger", "Same", "Smaller"]
+
+        const initialConfirmed = [
+          { id: "A", title: "Implement infinite scroll for search results", tags: ["Frontend"], point: 5 },
+          { id: "B", title: "Update pricing plan structure", tags: ["Backend", "Billing"], point: 13 },
+          { id: "C", title: "Add columns to CSV export", tags: ["Backend"], point: 3 },
+          { id: "D", title: "Adjust notification toast UI", tags: ["Frontend"], point: 2 },
+          { id: "E", title: "Improve retry logic in batch jobs", tags: ["Batch"], point: 8 },
+        ]
+
+        const initialBacklog = [
+          { id: "X", title: "Optimize all profile images in bulk", tags: ["Batch", "Image"] },
+          { id: "Y", title: "Parallelize search API", tags: ["Backend", "Performance"] },
+          { id: "Z", title: "Enable offline mode for mobile", tags: ["Frontend", "PWA"] },
+        ]
+
+        return {
+          // state
+          deckName: 'Fibonacci',
+          filterText: '',
+          confirmed: initialConfirmed,
+          backlog: initialBacklog,
+          currentId: initialBacklog[0]?.id ?? null,
+          choices: {}, // { [refId]: 'Bigger' | 'Same' | 'Smaller' }
+          picked: undefined,
+
+          // constants for template
+          labels,
+
+          // helpers
+          neighborsInclusive(deck, p) {
+            const idx = deck.indexOf(p)
+            if (idx === -1) return [p]
+            const prev = idx > 0 ? deck[idx - 1] : undefined
+            const next = idx < deck.length - 1 ? deck[idx + 1] : undefined
+            return [prev, p, next].filter(v => v !== undefined)
+          },
+          satisfiesWithDeck(deck, label, candidate, refPoint) {
+            if (label === 'Bigger') return candidate > refPoint
+            if (label === 'Same') return this.neighborsInclusive(deck, refPoint).includes(candidate)
+            return candidate < refPoint
+          },
+
+          // computed
+          get deckToUse() { return this.deckName === 'Linear' ? linearDeck : defaultDeck },
+          get current() { return this.backlog.find(s => s.id === this.currentId) || null },
+          get filteredBacklog() {
+            const key = this.filterText.trim().toLowerCase()
+            return this.backlog.filter(s => !key || s.title.toLowerCase().includes(key) || s.tags.join(' ').toLowerCase().includes(key))
+          },
+          get candidates() {
+            return this.deckToUse.filter(cand =>
+              Object.entries(this.choices).every(([id, ch]) => {
+                if (!ch) return true
+                const ref = this.confirmed.find(s => s.id === id)
+                if (!ref || ref.point == null) return true
+                return this.satisfiesWithDeck(this.deckToUse, ch, cand, ref.point)
+              })
+            )
+          },
+          get availability() {
+            const avail = {}
+            for (const s of this.confirmed) {
+              const chosen = this.choices[s.id]
+              if (chosen) {
+                avail[s.id] = { Bigger: chosen === 'Bigger', Same: chosen === 'Same', Smaller: chosen === 'Smaller' }
+                continue
+              }
+              const rp = s.point
+              const anyBig = this.candidates.some(v => v > (rp ?? Infinity))
+              const anyEq = this.candidates.some(v => this.neighborsInclusive(this.deckToUse, rp ?? -Infinity).includes(v))
+              const anySmall = this.candidates.some(v => v < (rp ?? -Infinity))
+              avail[s.id] = { Bigger: anyBig, Same: anyEq, Smaller: anySmall }
+            }
+            return avail
+          },
+
+          // actions
+          selectBacklog(id) {
+            this.currentId = id
+            this.choices = {}
+            this.picked = undefined
+          },
+          toggleChoice(refId, label) {
+            const prev = this.choices[refId]
+            this.choices = { ...this.choices, [refId]: prev === label ? undefined : label }
+            this.picked = undefined
+          },
+          isLabelEnabled(refId, label) {
+            const a = this.availability[refId]
+            if (!a) return true
+            const chosen = this.choices[refId]
+            return chosen ? chosen === label : a[label]
+          },
+          handleConfirm() {
+            if (!this.current || this.picked === undefined) return
+            // decide next BEFORE mutating backlog
+            const nextFromOld = this.backlog.find(s => s.id !== this.current.id)
+            this.confirmed = [...this.confirmed, { ...this.current, point: this.picked }]
+            this.backlog = this.backlog.filter(s => s.id !== this.current.id)
+            this.currentId = nextFromOld?.id ?? null
+            this.choices = {}
+            this.picked = undefined
+          },
+          resetAll() {
+            this.choices = {}
+            this.picked = undefined
+          },
+        }
+      }
+    </script>
+  </body>
+</html>
